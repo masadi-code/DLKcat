@@ -102,8 +102,9 @@ class KcatPrediction(nn.Module):
 
 
 class Trainer(object):
-    def __init__(self, model, lr, weight_decay):
+    def __init__(self, model, lr, weight_decay, batch_size=1):
         self.model = model
+        self.batch_size = batch_size
         self.optimizer = optim.Adam(self.model.parameters(),
                                     lr=lr, weight_decay=weight_decay)
 
@@ -112,11 +113,13 @@ class Trainer(object):
         N = len(dataset)
         loss_total = 0
         trainCorrect, trainPredict = [], []
+        self.optimizer.zero_grad()
         for i, data in enumerate(dataset):
             loss, correct_values, predicted_values = self.model(data)
-            self.optimizer.zero_grad()
             loss.backward()
-            self.optimizer.step()
+            if self.batch_size == 1 or ((i+1)%self.batch_size == 0) or i+1 == N:
+                self.optimizer.step()
+                self.optimizer.zero_grad()
             loss_total += loss.to('cpu').data.numpy()
 
             correct_values = math.log10(math.pow(2,correct_values))
@@ -221,7 +224,7 @@ def train_model(args):
     """Set a model."""
     torch.manual_seed(1234)
     model = KcatPrediction(n_fingerprint, n_word, dim, layer_gnn, window, layer_cnn, layer_output).to(device)
-    trainer = Trainer(model, lr, weight_decay)
+    trainer = Trainer(model, lr, weight_decay, batch_size=args.batch_size)
     tester = Tester(model)
 
     args_vars = vars(args)
@@ -275,6 +278,7 @@ if __name__ == "__main__":
     parser.add_argument("--decay-interval", type=int, default=10)
     parser.add_argument("--weight-decay", type=int, default=1e-6)
     parser.add_argument("--iterations", type=int, default=50)
+    parser.add_argument("--batch-size", type=int, default=1)
     args = parser.parse_args()
 
     train_model(args)

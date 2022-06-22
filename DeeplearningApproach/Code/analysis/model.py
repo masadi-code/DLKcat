@@ -50,7 +50,7 @@ class KcatPrediction(nn.Module):
 
         xs = torch.unsqueeze(torch.unsqueeze(xs, 0), 0)
         for i in range(layer):
-            xs = torch.relu(self.W_cnn[i](xs))
+            xs = F.leaky_relu(self.W_cnn[i](xs))
         xs = torch.squeeze(torch.squeeze(xs, 0), 0)
 
         h = torch.relu(self.W_attention(x))

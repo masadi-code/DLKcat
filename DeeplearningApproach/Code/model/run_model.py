@@ -4,6 +4,7 @@
 # Author: LE YUAN
 # Date: 2020-10-23
 
+import argparse
 import pickle
 import sys
 import timeit
@@ -17,7 +18,7 @@ from sklearn.metrics import mean_squared_error,r2_score
 
 
 class KcatPrediction(nn.Module):
-    def __init__(self):
+    def __init__(self, n_fingerprint, n_word, dim, layer_gnn, window, layer_cnn, layer_output):
         super(KcatPrediction, self).__init__()
         self.embed_fingerprint = nn.Embedding(n_fingerprint, dim)
         self.embed_word = nn.Embedding(n_word, dim)
@@ -32,19 +33,19 @@ class KcatPrediction(nn.Module):
         # self.W_interaction = nn.Linear(2*dim, 2)
         self.W_interaction = nn.Linear(2*dim, 1)
 
-    def gnn(self, xs, A, layer):
-        for i in range(layer):
-            hs = torch.relu(self.W_gnn[i](xs))
+    def gnn(self, xs, A):
+        for G in self.W_gnn:
+            hs = torch.relu(G(xs))
             xs = xs + torch.matmul(A, hs)
         # return torch.unsqueeze(torch.sum(xs, 0), 0)
         return torch.unsqueeze(torch.mean(xs, 0), 0)
 
-    def attention_cnn(self, x, xs, layer):
+    def attention_cnn(self, x, xs):
         """The attention mechanism is applied to the last layer of CNN."""
 
         xs = torch.unsqueeze(torch.unsqueeze(xs, 0), 0)
-        for i in range(layer):
-            xs = torch.relu(self.W_cnn[i](xs))
+        for C in self.W_cnn:
+            xs = torch.relu(C(xs))
         xs = torch.squeeze(torch.squeeze(xs, 0), 0)
 
         h = torch.relu(self.W_attention(x))
@@ -61,17 +62,16 @@ class KcatPrediction(nn.Module):
 
         """Compound vector with GNN."""
         fingerprint_vectors = self.embed_fingerprint(fingerprints)
-        compound_vector = self.gnn(fingerprint_vectors, adjacency, layer_gnn)
+        compound_vector = self.gnn(fingerprint_vectors, adjacency)
 
         """Protein vector with attention-CNN."""
         word_vectors = self.embed_word(words)
-        protein_vector = self.attention_cnn(compound_vector,
-                                            word_vectors, layer_cnn)
+        protein_vector = self.attention_cnn(compound_vector, word_vectors)
 
         """Concatenate the above two vectors and output the interaction."""
         cat_vector = torch.cat((compound_vector, protein_vector), 1)
-        for j in range(layer_output):
-            cat_vector = torch.relu(self.W_out[j](cat_vector))
+        for L in self.W_out:
+            cat_vector = torch.relu(L(cat_vector))
         interaction = self.W_interaction(cat_vector)
         # print(interaction)
 
@@ -102,7 +102,7 @@ class KcatPrediction(nn.Module):
 
 
 class Trainer(object):
-    def __init__(self, model):
+    def __init__(self, model, lr, weight_decay):
         self.model = model
         self.optimizer = optim.Adam(self.model.parameters(),
                                     lr=lr, weight_decay=weight_decay)
@@ -112,7 +112,7 @@ class Trainer(object):
         N = len(dataset)
         loss_total = 0
         trainCorrect, trainPredict = [], []
-        for data in dataset:
+        for i, data in enumerate(dataset):
             loss, correct_values, predicted_values = self.model(data)
             self.optimizer.zero_grad()
             loss.backward()
@@ -156,7 +156,7 @@ class Tester(object):
     def save_model(self, model, filename):
         torch.save(model.state_dict(), filename)
 
-def load_tensor(file_name, dtype):
+def load_tensor(file_name, dtype, device):
     return [dtype(d).to(device) for d in np.load(file_name + '.npy', allow_pickle=True)]
 
 
@@ -175,16 +175,18 @@ def split_dataset(dataset, ratio):
     return dataset_1, dataset_2
 
 
-if __name__ == "__main__":
-
+def train_model(args):
     """Hyperparameters."""
-    (DATASET, radius, ngram, dim, layer_gnn, window, layer_cnn, layer_output,
-     lr, lr_decay, decay_interval, weight_decay, iteration,
-     setting) = sys.argv[1:]
-    (dim, layer_gnn, window, layer_cnn, layer_output, decay_interval,
-     iteration) = map(int, [dim, layer_gnn, window, layer_cnn, layer_output,
-                            decay_interval, iteration])
-    lr, lr_decay, weight_decay = map(float, [lr, lr_decay, weight_decay])
+    dim = args.dim
+    layer_gnn = args.layer_gnn
+    window = args.window
+    layer_cnn = args.layer_cnn
+    layer_output = args.layer_output
+    lr = args.lr
+    lr_decay = args.lr_decay
+    decay_interval = args.decay_interval
+    weight_decay = args.weight_decay
+    iteration = args.iterations
 
     # print(type(radius))
 
@@ -198,10 +200,10 @@ if __name__ == "__main__":
 
     """Load preprocessed data."""
     dir_input = ('../../Data/input/')
-    compounds = load_tensor(dir_input + 'compounds', torch.LongTensor)
-    adjacencies = load_tensor(dir_input + 'adjacencies', torch.FloatTensor)
-    proteins = load_tensor(dir_input + 'proteins', torch.LongTensor)
-    interactions = load_tensor(dir_input + 'regression', torch.FloatTensor)
+    compounds = load_tensor(dir_input + 'compounds', torch.LongTensor, device)
+    adjacencies = load_tensor(dir_input + 'adjacencies', torch.FloatTensor, device)
+    proteins = load_tensor(dir_input + 'proteins', torch.LongTensor, device)
+    interactions = load_tensor(dir_input + 'regression', torch.FloatTensor, device)
     fingerprint_dict = load_pickle(dir_input + 'fingerprint_dict.pickle')
     word_dict = load_pickle(dir_input + 'sequence_dict.pickle')
     n_fingerprint = len(fingerprint_dict)
@@ -218,13 +220,16 @@ if __name__ == "__main__":
 
     """Set a model."""
     torch.manual_seed(1234)
-    model = KcatPrediction().to(device)
-    trainer = Trainer(model)
+    model = KcatPrediction(n_fingerprint, n_word, dim, layer_gnn, window, layer_cnn, layer_output).to(device)
+    trainer = Trainer(model, lr, weight_decay)
     tester = Tester(model)
 
+    args_vars = vars(args)
+    args_strs = [str(k)+str(v) for (k, v) in args_vars.items() if k != "run_name"]
+    setting = args.run_name + '-' + str.join('_', args_strs)
     """Output files."""
-    file_MAEs = '../../Data/Results/output/MAEs--' + setting + '.txt'
-    file_model = '../../Data/Results/output/' + setting
+    file_MAEs = '../../Results/output/MAEs--' + setting + '.txt'
+    file_model = '../../Results/output/' + setting
     MAEs = ('Epoch\tTime(sec)\tRMSE_train\tR2_train\tMAE_dev\tMAE_test\tRMSE_dev\tRMSE_test\tR2_dev\tR2_test')
     with open(file_MAEs, 'w') as f:
         f.write(MAEs + '\n')
@@ -252,3 +257,24 @@ if __name__ == "__main__":
         tester.save_model(model, file_model)
 
         print('\t'.join(map(str, MAEs)))
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    # (DATASET, radius, ngram, dim, layer_gnn, window, layer_cnn, layer_output,
+    # lr, lr_decay, decay_interval, weight_decay, iteration,
+    # setting)
+    parser.add_argument("run_name")
+    parser.add_argument("--dim", type=int, default=20)
+    parser.add_argument("--layer-gnn", type=int, default=3)
+    parser.add_argument("--window", type=int, default=11)
+    parser.add_argument("--layer-cnn", type=int, default=3)
+    parser.add_argument("--layer-output", type=int, default=3)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--lr-decay", type=float, default=0.5)
+    parser.add_argument("--decay-interval", type=int, default=10)
+    parser.add_argument("--weight-decay", type=int, default=1e-6)
+    parser.add_argument("--iterations", type=int, default=50)
+    args = parser.parse_args()
+
+    train_model(args)

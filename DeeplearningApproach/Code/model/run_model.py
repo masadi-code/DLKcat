@@ -276,7 +276,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--lr-decay", type=float, default=0.5)
     parser.add_argument("--decay-interval", type=int, default=10)
-    parser.add_argument("--weight-decay", type=int, default=1e-6)
+    parser.add_argument("--weight-decay", type=float, default=1e-6)
     parser.add_argument("--iterations", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=1)
     args = parser.parse_args()

@@ -84,7 +84,7 @@ class KcatPrediction(nn.Module):
         # print(predicted_interaction)
 
         if train:
-            loss = F.mse_loss(predicted_interaction, correct_interaction)
+            loss = F.mse_loss(predicted_interaction[0], correct_interaction)
             correct_values = correct_interaction.to('cpu').data.numpy()
             predicted_values = predicted_interaction.to('cpu').data.numpy()[0]
             return loss, correct_values, predicted_values
@@ -181,6 +181,7 @@ def split_dataset(dataset, ratio):
 
 def train_model(args):
     """Hyperparameters."""
+    pos_args = ["run_name", "data_directory"]
     dim = args.dim
     layer_gnn = args.layer_gnn
     window = args.window
@@ -203,7 +204,7 @@ def train_model(args):
         print('The code uses CPU!!!')
 
     """Load preprocessed data."""
-    dir_input = ('../../Data/input/')
+    dir_input = args.data_directory+'/'
     compounds = load_tensor(dir_input + 'compounds', torch.LongTensor, device)
     adjacencies = load_tensor(dir_input + 'adjacencies', torch.FloatTensor, device)
     proteins = load_tensor(dir_input + 'proteins', torch.LongTensor, device)
@@ -229,11 +230,12 @@ def train_model(args):
     tester = Tester(model)
 
     args_vars = vars(args)
-    args_strs = [str(k)+str(v) for (k, v) in args_vars.items() if k != "run_name"]
+    args_strs = [str(k)+str(v) for (k, v) in args_vars.items() if k not in pos_args]
     setting = args.run_name + '-' + str.join('_', args_strs)
     """Output files."""
     file_MAEs = '../../Results/output/MAEs--' + setting + '.txt'
-    file_model = '../../Results/output/' + setting
+    file_latest_model = '../../Results/output/' + setting
+    file_optimal_model = '../../Results/output/dev_opt_' + setting
     MAEs = ('Epoch\tTime(sec)\tRMSE_train\tR2_train\tMAE_dev\tMAE_test\tRMSE_dev\tRMSE_test\tR2_dev\tR2_test')
     with open(file_MAEs, 'w') as f:
         f.write(MAEs + '\n')
@@ -241,6 +243,8 @@ def train_model(args):
     """Start training."""
     print('Training...')
     print(MAEs)
+
+    optimal_dev_mae = 1e10
     start = timeit.default_timer()
 
     for epoch in range(1, iteration+1):
@@ -255,10 +259,14 @@ def train_model(args):
         end = timeit.default_timer()
         time = end - start
 
+        if MAE_dev < optimal_dev_mae:
+            optimal_dev_mae = MAE_dev
+            print(f" * Saving model from epoch {epoch} with dev MAE {MAE_dev}")
+            tester.save_model(model, file_optimal_model)
         MAEs = [epoch, time, rmse_train, r2_train, MAE_dev,
                 MAE_test, RMSE_dev, RMSE_test, R2_dev, R2_test]
         tester.save_MAEs(MAEs, file_MAEs)
-        tester.save_model(model, file_model)
+        tester.save_model(model, file_latest_model)
 
         print('\t'.join(map(str, MAEs)))
 
@@ -269,6 +277,7 @@ if __name__ == "__main__":
     # lr, lr_decay, decay_interval, weight_decay, iteration,
     # setting)
     parser.add_argument("run_name")
+    parser.add_argument("data_directory")
     parser.add_argument("--dim", type=int, default=20)
     parser.add_argument("--layer-gnn", type=int, default=3)
     parser.add_argument("--window", type=int, default=11)

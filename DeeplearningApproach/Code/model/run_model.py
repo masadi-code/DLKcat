@@ -116,11 +116,12 @@ class Trainer(object):
         self.optimizer.zero_grad()
         for i, data in enumerate(dataset):
             loss, correct_values, predicted_values = self.model(data)
+            loss_total += loss.to('cpu').data.numpy()
+            loss = loss / self.batch_size
             loss.backward()
             if self.batch_size == 1 or ((i+1)%self.batch_size == 0) or i+1 == N:
                 self.optimizer.step()
                 self.optimizer.zero_grad()
-            loss_total += loss.to('cpu').data.numpy()
 
             correct_values = math.log10(math.pow(2,correct_values))
             predicted_values = math.log10(math.pow(2,predicted_values))
